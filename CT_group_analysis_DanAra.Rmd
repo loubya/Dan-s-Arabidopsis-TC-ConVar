@@ -1,0 +1,473 @@
+The goal of this analysis is to perform a CT group analysis of Dan's Arabidopsis data.
+
+Dan gave the his script and the R.Data, so I modified them in this file.
+
+
+```{r}
+# Load the data from my computer:
+load("C:/Users/Po-Kai/Box Sync/Mimulus_swc_timecourse_2018/RNAseq/limma/Dan_scripts/Sleuth_exp.RData")
+
+# The function for calculating standard error.
+se = function(x) {
+    x = na.omit(x)
+    sd(x)/sqrt(length(x))
+}
+
+```
+This RData contain 2 objects: "exp" and "sub_sample_info".
+
+"exp": Rows = different transcripts (may from the same gene); Cols = samples.
+
+```{r}
+library(ggplot2)
+library(reshape2)
+library(dplyr)
+
+```
+
+
+```{r}
+# load the CT group data from Kerwin et al 2011
+CT_groups = read.csv('C:/Users/Po-Kai/Box Sync/Mimulus_swc_timecourse_2018/RNAseq/CT_group_analysis/Dan_script/Kliebenstein_Supplemental_Dataset_1.csv',skip=4)
+CT_groups = droplevels(CT_groups[CT_groups$CT.Phase.Group != 24,])
+```
+
+
+
+Pre-processing the data
+```{r}
+expr_transcript = exp
+
+
+# prepare dataframe for mapping transcripts to genes
+trans_to_gene = data.frame(Transcript = rownames(expr_transcript),stringsAsFactors=F)
+trans_to_gene$Gene = sapply(trans_to_gene$Transcript,function(trans) strsplit(trans,'.',fixed=T)[[1]][1])
+
+# count gene level expression by summing tpm values across transcripts
+expr_gene = apply(expr_transcript,2,function(x) tapply(x,trans_to_gene$Gene,sum))
+
+# log2 transform data (with offset == 1)
+log_expr_gene = log2(expr_gene+1)
+
+# select genes in CT groups, order by CT_group$AGI
+log_expr_gene = log_expr_gene[rownames(log_expr_gene) %in% CT_groups$AGI,]
+
+# select CT_groups rows with genes in log_expr_gene
+CT_groups = CT_groups[match(rownames(log_expr_gene),CT_groups$AGI),]
+
+all(CT_groups$AGI == rownames(log_expr_gene))
+
+# Set the CT.Phase.Group as the factor
+CT_groups$CT.Phase.Group = factor(CT_groups$CT.Phase.Group)
+```
+
+
+
+
+```{r}
+# calculate mean expression of each CT group in each sample
+CT_group_means = apply(log_expr_gene,2,function(x) {
+		lm1 = lm(x~CT.Phase.Group+0,CT_groups)
+		return(coef(lm1))
+})
+
+# scaling
+CT_group_means = apply(CT_group_means,2,'-',rowMeans(CT_group_means))
+CT_group_means = apply(CT_group_means,2,'/',apply(CT_group_means,1,sd))
+# CT_group_means = melt(t(CT_group_means))
+
+
+
+# Preparing for de-transformation:
+fun = function(x) x
+ifun = function(x) x
+
+#pdf('CT_group_plots_by_time.pdf')
+
+for(i in 1:nrow(CT_group_means)){
+	print(i)
+	sub_sample_info$y = CT_group_means[i,]
+	sub_sample_info$ZT = as.numeric(as.character(sub_sample_info$ZT))
+	means = tapply(fun(sub_sample_info$y),list(sub_sample_info$ZT,sub_sample_info$Genotype,sub_sample_info$Treatment,sub_sample_info$Sampling.Day),mean)
+	ses = tapply(fun(sub_sample_info$y),list(sub_sample_info$ZT,sub_sample_info$Genotype,sub_sample_info$Treatment,sub_sample_info$Sampling.Day),se)
+	means = melt(means)
+	colnames(means) = c('ZT','Genotype','Treatment','Sampling.Day','mean')
+	ses = melt(ses)
+	colnames(ses) = c('ZT','Genotype','Treatment','Sampling.Day','se')
+	mean_data = data.frame(means,ymin = means$mean-2*ses$se,ymax = means$mean+2*ses$se,stringsAsFactors=F)
+	mean_data$Genotype = as.character(mean_data$Genotype)
+	mean_data$Treatment = as.character(mean_data$Treatment)
+	mean_data$Sampling.Day = as.character(mean_data$Sampling.Day)
+	mean_data$mean = ifun(mean_data$mean)
+	mean_data$ymin = ifun(mean_data$ymin)
+	mean_data$ymax = ifun(mean_data$ymax)
+
+	# mean_data$ZT = factor(mean_data$ZT)
+	p = ggplot(sub_sample_info,aes(x = ZT,y=y)) + ggtitle(rownames(CT_group_means)[i])
+	p = p +  geom_point(aes(color = Treatment))
+	# p = p + geom_smooth(aes(color = Treatment),method=lm)
+	p = p + geom_ribbon(data=mean_data,aes(x=ZT,y=mean,ymin = ymin,ymax=ymax, linetype=NA,group = Treatment),alpha = .2)
+	p = p + geom_line(data=mean_data,aes(x=ZT,y=mean,color=Treatment)) 
+	p = p + facet_grid(Sampling.Day~Genotype) + ylim(c(min(CT_group_means),max(CT_group_means)))
+	print(p)		
+}
+#dev.off()
+
+
+```
+
+
+```{r}
+Feb.Col.con <- sub_sample_info %>% filter(Date == "2014-02-26", Genotype=="Col", Treatment == "Con") %>% select(sample)
+
+Feb.Col.var <- sub_sample_info %>% filter(Date == "2014-02-26", Genotype=="Col", Treatment == "Var") %>% select(sample)
+
+Feb.CF.con <- sub_sample_info %>% filter(Date == "2014-02-26", Genotype=="ColFRI", Treatment == "Con") %>% select(sample)
+
+Feb.CF.var <- sub_sample_info %>% filter(Date == "2014-02-26", Genotype=="ColFRI", Treatment == "Var") %>% select(sample)
+
+Mar.CF.con <- sub_sample_info %>% filter(Date == "2014-03-10", Genotype=="ColFRI", Treatment == "Con") %>% select(sample)
+
+Mar.CF.var <- sub_sample_info %>% filter(Date == "2014-03-10", Genotype=="ColFRI", Treatment == "Var") %>% select(sample)
+
+```
+
+```{r}
+FCc.gm <- t(CT_group_means[,colnames(CT_group_means) %in% Feb.Col.con[,1]])
+
+FCv.gm <- t(CT_group_means[,colnames(CT_group_means) %in% Feb.Col.var[,1]])
+```
+
+#### Run the JTK_Cycle
+This part is modified from ¡§Run_JTK_CYCLE (Example2).R¡¨ provided by JTK_Cycle authors.
+
+
+1. Set up some variables:
+```{r}
+source("C:/Users/Po-Kai/Box Sync/Mimulus_swc_timecourse_2018/RNAseq/JTK_cycle/JTK_CYCLEv3.1.R")
+
+# This is a setting for preventing some data.frame loading issues.
+options(stringsAsFactors=FALSE)
+
+```
+
+
+2. Set the parameters for the analysis:
+I have 24 phase groups (different columns) -> Think: 24 time points when running JTK_Cycle
+```{r}
+# equivalent to 16 total time points, 1 replicates per time point
+jtkdist(24, 1)
+
+# Looking for rhythms of 24 hours. (We used the LD conditions so we are only interested in 24h-rhythms.)
+periods <- 24       
+
+# 1.5 is the number of hours between cT groups
+jtk.init(periods,1) 
+
+```
+
+
+3. Run the analysis:
+
+3.1. Run the constant tmp first:
+```{r}
+# Set up the `annot` and `data` which are written in the script we sourced.
+annot <- as.data.frame(rownames(FCc.gm))  
+colnames(annot) <- "samples"
+
+
+# Set up the `project` and `data`
+project <- "Feb.Col.con"
+data <- FCc.gm
+
+# Run
+cat("JTK analysis started on",date(),"\n")
+flush.console()
+
+st <- system.time({
+  res <- apply(data,1,function(z) {
+    jtkx(z)
+    c(JTK.ADJP,JTK.PERIOD,JTK.LAG,JTK.AMP)
+  })
+  res <- as.data.frame(t(res))
+  bhq <- p.adjust(unlist(res[,1]),"BH")
+  res <- cbind(bhq,res)
+  colnames(res) <- c("BH.Q","ADJ.P","PER","LAG","AMP")
+  results_c.condition_CT.groups <- cbind(annot,res,data)
+  #results_c.condition_CT.groups <- results_c.condition_CT.groups[order(res$ADJ.P,-res$AMP),]
+})
+print(st)
+
+
+# Export the results:
+#save(results_c,file=paste("JTK",project,"rda",sep="."))
+#write.table(results_c,file=paste("JTK",project,"txt",sep="."),row.names=F,col.names=T,quote=F,sep="\t")
+
+```
+
+
+3.2. Run the fluctuating tmp:
+```{r}
+# Set up the `annot` and `data` which are written in the script we sourced.
+annot <- as.data.frame(rownames(FCv.gm))  
+colnames(annot) <- "samples"
+
+# Set up the `project` and `data`
+project <- "Feb.Col.var"
+data <- FCv.gm
+
+# Run
+cat("JTK analysis started on",date(),"\n")
+flush.console()
+
+st <- system.time({
+  res <- apply(data,1,function(z) {
+    jtkx(z)
+    c(JTK.ADJP,JTK.PERIOD,JTK.LAG,JTK.AMP)
+  })
+  res <- as.data.frame(t(res))
+  bhq <- p.adjust(unlist(res[,1]),"BH")
+  res <- cbind(bhq,res)
+  colnames(res) <- c("BH.Q","ADJ.P","PER","LAG","AMP")
+  results_f.condition_CT.groups <- cbind(annot,res,data)
+  #results_f.condition_CT.groups <- results_f.condition_CT.groups[order(res$ADJ.P,-res$AMP),]
+})
+print(st)
+
+
+# Export the results:
+#save(results_f,file=paste("JTK",project,"rda",sep="."))
+#write.table(results_f,file=paste("JTK",project,"txt",sep="."),row.names=F,col.names=T,quote=F,sep="\t")
+
+```
+
+
+4. Visualization!
+```{r}
+r.c <- results_c.condition_CT.groups[,c(1,5)]
+r.f <- results_f.condition_CT.groups[,c(1,5)]
+
+sZT.c <- sub_sample_info %>% filter(Date == "2014-02-26", Genotype=="Col", Treatment == "Con") %>% select(ZT)
+sZT.f <- sub_sample_info %>% filter(Date == "2014-02-26", Genotype=="Col", Treatment == "Var") %>% select(ZT)
+
+
+r.c$expected.ZT <- sZT.c$ZT
+r.f$expected.ZT <- sZT.f$ZT
+
+r.total <- rbind(r.c, r.f)
+
+
+r.total$trt <- c(rep("con",each=nrow(r.c)), rep("var",each=nrow(r.f)))
+
+colnames(r.total)[colnames(r.total)=="LAG"] <- "ZT"
+
+
+ggplot(r.total,aes(x = expected.ZT,y=ZT)) + 
+  #geom_point(aes(color = trt)) +
+  geom_jitter(aes(color = trt), width = .3)
+
+ggplot(r.total,aes(x = expected.ZT,y=ZT)) + 
+  #geom_point(aes(color = trt)) +
+  #geom_jitter(aes(color = trt), width = .3)
+  geom_boxplot(aes(group = interaction(expected.ZT,trt),color=trt)) +
+  geom_abline(slope=1,intercept = 0)
+```
+
+
+
+
+
+
+
+
+```{r}
+FCFc.gm <- t(CT_group_means[,colnames(CT_group_means) %in% Feb.CF.con[,1]])
+
+FCFv.gm <- t(CT_group_means[,colnames(CT_group_means) %in% Feb.CF.var[,1]])
+
+
+
+
+# Set up the `annot` and `data` which are written in the script we sourced.
+annot <- as.data.frame(rownames(FCFc.gm))  
+colnames(annot) <- "samples"
+
+
+# Set up the `project` and `data`
+project <- "Feb.ColFRI.con"
+data <- FCFc.gm
+
+# Run
+cat("JTK analysis started on",date(),"\n")
+flush.console()
+
+st <- system.time({
+  res <- apply(data,1,function(z) {
+    jtkx(z)
+    c(JTK.ADJP,JTK.PERIOD,JTK.LAG,JTK.AMP)
+  })
+  res <- as.data.frame(t(res))
+  bhq <- p.adjust(unlist(res[,1]),"BH")
+  res <- cbind(bhq,res)
+  colnames(res) <- c("BH.Q","ADJ.P","PER","LAG","AMP")
+  results_c.condition_CT.groups <- cbind(annot,res,data)
+  #results_c.condition_CT.groups <- results_c.condition_CT.groups[order(res$ADJ.P,-res$AMP),]
+})
+print(st)
+
+
+# Set up the `annot` and `data` which are written in the script we sourced.
+annot <- as.data.frame(rownames(FCFv.gm))  
+colnames(annot) <- "samples"
+
+# Set up the `project` and `data`
+project <- "Feb.ColFRI.var"
+data <- FCFv.gm
+
+# Run
+cat("JTK analysis started on",date(),"\n")
+flush.console()
+
+st <- system.time({
+  res <- apply(data,1,function(z) {
+    jtkx(z)
+    c(JTK.ADJP,JTK.PERIOD,JTK.LAG,JTK.AMP)
+  })
+  res <- as.data.frame(t(res))
+  bhq <- p.adjust(unlist(res[,1]),"BH")
+  res <- cbind(bhq,res)
+  colnames(res) <- c("BH.Q","ADJ.P","PER","LAG","AMP")
+  results_f.condition_CT.groups <- cbind(annot,res,data)
+  #results_f.condition_CT.groups <- results_f.condition_CT.groups[order(res$ADJ.P,-res$AMP),]
+})
+print(st)
+
+
+```
+
+
+```{r}
+r.c <- results_c.condition_CT.groups[,c(1,5)]
+r.f <- results_f.condition_CT.groups[,c(1,5)]
+
+sZT.c <- sub_sample_info %>% filter(Date == "2014-02-26", Genotype=="ColFRI", Treatment == "Con") %>% select(ZT)
+sZT.f <- sub_sample_info %>% filter(Date == "2014-02-26", Genotype=="ColFRI", Treatment == "Var") %>% select(ZT)
+
+
+r.c$expected.ZT <- sZT.c$ZT
+r.f$expected.ZT <- sZT.f$ZT
+
+r.total <- rbind(r.c, r.f)
+
+r.total$trt <- c(rep("con",each=nrow(r.c)), rep("var",each=nrow(r.f)))
+
+colnames(r.total)[colnames(r.total)=="LAG"] <- "ZT"
+
+
+ggplot(r.total,aes(x = expected.ZT,y=ZT)) + 
+  #geom_point(aes(color = trt)) +
+  geom_jitter(aes(color = trt), width = .3)
+
+ggplot(r.total,aes(x = expected.ZT,y=ZT)) + 
+  #geom_point(aes(color = trt)) +
+  #geom_jitter(aes(color = trt), width = .3)
+  geom_boxplot(aes(group = interaction(expected.ZT,trt),color=trt)) +
+  geom_abline(slope=1,intercept = 0)
+```
+
+
+
+```{r}
+MCFc.gm <- t(CT_group_means[,colnames(CT_group_means) %in% Mar.CF.con[,1]])
+
+MCFv.gm <- t(CT_group_means[,colnames(CT_group_means) %in% Mar.CF.var[,1]])
+
+
+
+
+# Set up the `annot` and `data` which are written in the script we sourced.
+annot <- as.data.frame(rownames(MCFc.gm))  
+colnames(annot) <- "samples"
+
+
+# Set up the `project` and `data`
+project <- "Mar.ColFRI.con"
+data <- MCFc.gm
+
+# Run
+cat("JTK analysis started on",date(),"\n")
+flush.console()
+
+st <- system.time({
+  res <- apply(data,1,function(z) {
+    jtkx(z)
+    c(JTK.ADJP,JTK.PERIOD,JTK.LAG,JTK.AMP)
+  })
+  res <- as.data.frame(t(res))
+  bhq <- p.adjust(unlist(res[,1]),"BH")
+  res <- cbind(bhq,res)
+  colnames(res) <- c("BH.Q","ADJ.P","PER","LAG","AMP")
+  results_c.condition_CT.groups <- cbind(annot,res,data)
+  #results_c.condition_CT.groups <- results_c.condition_CT.groups[order(res$ADJ.P,-res$AMP),]
+})
+print(st)
+
+
+# Set up the `annot` and `data` which are written in the script we sourced.
+annot <- as.data.frame(rownames(MCFv.gm))  
+colnames(annot) <- "samples"
+
+# Set up the `project` and `data`
+project <- "Mar.ColFRI.var"
+data <- MCFv.gm
+
+# Run
+cat("JTK analysis started on",date(),"\n")
+flush.console()
+
+st <- system.time({
+  res <- apply(data,1,function(z) {
+    jtkx(z)
+    c(JTK.ADJP,JTK.PERIOD,JTK.LAG,JTK.AMP)
+  })
+  res <- as.data.frame(t(res))
+  bhq <- p.adjust(unlist(res[,1]),"BH")
+  res <- cbind(bhq,res)
+  colnames(res) <- c("BH.Q","ADJ.P","PER","LAG","AMP")
+  results_f.condition_CT.groups <- cbind(annot,res,data)
+  #results_f.condition_CT.groups <- results_f.condition_CT.groups[order(res$ADJ.P,-res$AMP),]
+})
+print(st)
+
+
+```
+
+
+```{r}
+r.c <- results_c.condition_CT.groups[,c(1,5)]
+r.f <- results_f.condition_CT.groups[,c(1,5)]
+
+sZT.c <- sub_sample_info %>% filter(Date == "2014-03-10", Genotype=="ColFRI", Treatment == "Con") %>% select(ZT)
+sZT.f <- sub_sample_info %>% filter(Date == "2014-03-10", Genotype=="ColFRI", Treatment == "Var") %>% select(ZT)
+
+
+r.c$expected.ZT <- sZT.c$ZT
+r.f$expected.ZT <- sZT.f$ZT
+
+r.total <- rbind(r.c, r.f)
+
+r.total$trt <- c(rep("con",each=nrow(r.c)), rep("var",each=nrow(r.f)))
+
+colnames(r.total)[colnames(r.total)=="LAG"] <- "ZT"
+
+
+ggplot(r.total,aes(x = expected.ZT,y=ZT)) + 
+  #geom_point(aes(color = trt)) +
+  geom_jitter(aes(color = trt), width = .3)
+
+ggplot(r.total,aes(x = expected.ZT,y=ZT)) + 
+  #geom_point(aes(color = trt)) +
+  #geom_jitter(aes(color = trt), width = .3)
+  geom_boxplot(aes(group = interaction(expected.ZT,trt),color=trt)) +
+  geom_abline(slope=1,intercept = 0)
+```
