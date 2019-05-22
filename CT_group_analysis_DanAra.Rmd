@@ -3,9 +3,16 @@ The goal of this analysis is to perform a CT group analysis of Dan's Arabidopsis
 Dan gave the his script and the R.Data, so I modified them in this file.
 
 
+# 1. Loading data and packages:
 ```{r}
 # Load the data from my computer:
 load("C:/Users/Po-Kai/Box Sync/Mimulus_swc_timecourse_2018/RNAseq/limma/Dan_scripts/Sleuth_exp.RData")
+
+
+# load the CT group data from Kerwin et al 2011
+CT_groups = read.csv('C:/Users/Po-Kai/Box Sync/Mimulus_swc_timecourse_2018/RNAseq/CT_group_analysis/Dan_script/Kliebenstein_Supplemental_Dataset_1.csv',skip=4)
+CT_groups = droplevels(CT_groups[CT_groups$CT.Phase.Group != 24,])
+
 
 # The function for calculating standard error.
 se = function(x) {
@@ -18,23 +25,18 @@ This RData contain 2 objects: "exp" and "sub_sample_info".
 
 "exp": Rows = different transcripts (may from the same gene); Cols = samples.
 
-```{r}
+
+```{r,warning=F, message=F}
 library(ggplot2)
 library(reshape2)
 library(dplyr)
-
+  
 ```
 
 
-```{r}
-# load the CT group data from Kerwin et al 2011
-CT_groups = read.csv('C:/Users/Po-Kai/Box Sync/Mimulus_swc_timecourse_2018/RNAseq/CT_group_analysis/Dan_script/Kliebenstein_Supplemental_Dataset_1.csv',skip=4)
-CT_groups = droplevels(CT_groups[CT_groups$CT.Phase.Group != 24,])
-```
+# 2. Pre-processing the data
 
-
-
-Pre-processing the data
+#### 2.1: Sum up genes by transcripts
 ```{r}
 expr_transcript = exp
 
@@ -43,39 +45,44 @@ expr_transcript = exp
 trans_to_gene = data.frame(Transcript = rownames(expr_transcript),stringsAsFactors=F)
 trans_to_gene$Gene = sapply(trans_to_gene$Transcript,function(trans) strsplit(trans,'.',fixed=T)[[1]][1])
 
+
 # count gene level expression by summing tpm values across transcripts
 expr_gene = apply(expr_transcript,2,function(x) tapply(x,trans_to_gene$Gene,sum))
+
 
 # log2 transform data (with offset == 1)
 log_expr_gene = log2(expr_gene+1)
 
+
 # select genes in CT groups, order by CT_group$AGI
 log_expr_gene = log_expr_gene[rownames(log_expr_gene) %in% CT_groups$AGI,]
-
 # select CT_groups rows with genes in log_expr_gene
 CT_groups = CT_groups[match(rownames(log_expr_gene),CT_groups$AGI),]
-
+# Confirm
 all(CT_groups$AGI == rownames(log_expr_gene))
+
 
 # Set the CT.Phase.Group as the factor
 CT_groups$CT.Phase.Group = factor(CT_groups$CT.Phase.Group)
 ```
+Final object: 
+(1) `log_expr_gene` (with log transformation!)
+(2) Cleaned CT_groups
 
 
-
-
-```{r}
+#### 2.2: Calculate CT_group_means and visulaizaiton
+```{r, message=F, warning=F}
 # calculate mean expression of each CT group in each sample
 CT_group_means = apply(log_expr_gene,2,function(x) {
 		lm1 = lm(x~CT.Phase.Group+0,CT_groups)
 		return(coef(lm1))
 })
 
+
 # scaling
 CT_group_means = apply(CT_group_means,2,'-',rowMeans(CT_group_means))
 CT_group_means = apply(CT_group_means,2,'/',apply(CT_group_means,1,sd))
 # CT_group_means = melt(t(CT_group_means))
-
 
 
 # Preparing for de-transformation:
@@ -85,7 +92,7 @@ ifun = function(x) x
 #pdf('CT_group_plots_by_time.pdf')
 
 for(i in 1:nrow(CT_group_means)){
-	print(i)
+	#print(i)
 	sub_sample_info$y = CT_group_means[i,]
 	sub_sample_info$ZT = as.numeric(as.character(sub_sample_info$ZT))
 	means = tapply(fun(sub_sample_info$y),list(sub_sample_info$ZT,sub_sample_info$Genotype,sub_sample_info$Treatment,sub_sample_info$Sampling.Day),mean)
@@ -115,61 +122,73 @@ for(i in 1:nrow(CT_group_means)){
 
 
 ```
+Issues:
+(1) The (Col + Con) curves do not peak at the corresponding CT.Phase...
+(2) Some curves only display very week rhythm.
 
+> Overall, Var curves shift forward comparing to the Con curves.
+> 2014-03-10: The Con curves catch up the Var curves!
+
+
+# 3. CT_group analysis summary plots
+
+#### 3.1 Set up the JTK cycle:
+This part is modified from ¡§Run_JTK_CYCLE (Example2).R¡¨ provided by JTK_Cycle authors.
+I have 24 phase groups (different columns) -> Think: 24 time points when running JTK_Cycle
+```{r}
+source("C:/Users/Po-Kai/Box Sync/Mimulus_swc_timecourse_2018/RNAseq/JTK_cycle/JTK_CYCLEv3.1.R")
+
+
+# This is a setting for preventing some data.frame loading issues.
+options(stringsAsFactors=FALSE)
+
+
+# equivalent to 24 total time points, 1 replicates per time point
+jtkdist(24, 1)
+
+
+# Looking for rhythms of 24 hours. (We used the LD conditions so we are only interested in 24h-rhythms.)
+periods <- 24       
+
+
+# 1 is the number of hours between cT groups
+jtk.init(periods,1) 
+
+```
+
+
+#### 3.2 Data preprocessing
 
 ```{r}
+# Set1
 Feb.Col.con <- sub_sample_info %>% filter(Date == "2014-02-26", Genotype=="Col", Treatment == "Con") %>% select(sample)
 
 Feb.Col.var <- sub_sample_info %>% filter(Date == "2014-02-26", Genotype=="Col", Treatment == "Var") %>% select(sample)
 
+# Set2
 Feb.CF.con <- sub_sample_info %>% filter(Date == "2014-02-26", Genotype=="ColFRI", Treatment == "Con") %>% select(sample)
 
 Feb.CF.var <- sub_sample_info %>% filter(Date == "2014-02-26", Genotype=="ColFRI", Treatment == "Var") %>% select(sample)
 
+# Set3
 Mar.CF.con <- sub_sample_info %>% filter(Date == "2014-03-10", Genotype=="ColFRI", Treatment == "Con") %>% select(sample)
 
 Mar.CF.var <- sub_sample_info %>% filter(Date == "2014-03-10", Genotype=="ColFRI", Treatment == "Var") %>% select(sample)
 
 ```
+Check the ZT to see if they are arranged by correct order!
 
+#### 3.3 Run the analysis:
+
+##### Set1:
 ```{r}
 FCc.gm <- t(CT_group_means[,colnames(CT_group_means) %in% Feb.Col.con[,1]])
 
 FCv.gm <- t(CT_group_means[,colnames(CT_group_means) %in% Feb.Col.var[,1]])
 ```
 
-#### Run the JTK_Cycle
-This part is modified from ¡§Run_JTK_CYCLE (Example2).R¡¨ provided by JTK_Cycle authors.
 
-
-1. Set up some variables:
-```{r}
-source("C:/Users/Po-Kai/Box Sync/Mimulus_swc_timecourse_2018/RNAseq/JTK_cycle/JTK_CYCLEv3.1.R")
-
-# This is a setting for preventing some data.frame loading issues.
-options(stringsAsFactors=FALSE)
-
-```
-
-
-2. Set the parameters for the analysis:
-I have 24 phase groups (different columns) -> Think: 24 time points when running JTK_Cycle
-```{r}
-# equivalent to 16 total time points, 1 replicates per time point
-jtkdist(24, 1)
-
-# Looking for rhythms of 24 hours. (We used the LD conditions so we are only interested in 24h-rhythms.)
-periods <- 24       
-
-# 1.5 is the number of hours between cT groups
-jtk.init(periods,1) 
-
-```
-
-
-3. Run the analysis:
-
-3.1. Run the constant tmp first:
+(1) Run the constant tmp first:
 ```{r}
 # Set up the `annot` and `data` which are written in the script we sourced.
 annot <- as.data.frame(rownames(FCc.gm))  
@@ -206,7 +225,7 @@ print(st)
 ```
 
 
-3.2. Run the fluctuating tmp:
+(2) Run the fluctuating tmp:
 ```{r}
 # Set up the `annot` and `data` which are written in the script we sourced.
 annot <- as.data.frame(rownames(FCv.gm))  
@@ -242,7 +261,7 @@ print(st)
 ```
 
 
-4. Visualization!
+(3) Visualization!
 ```{r}
 r.c <- results_c.condition_CT.groups[,c(1,5)]
 r.f <- results_f.condition_CT.groups[,c(1,5)]
@@ -254,10 +273,12 @@ sZT.f <- sub_sample_info %>% filter(Date == "2014-02-26", Genotype=="Col", Treat
 r.c$expected.ZT <- sZT.c$ZT
 r.f$expected.ZT <- sZT.f$ZT
 
+
 r.total <- rbind(r.c, r.f)
 
 
 r.total$trt <- c(rep("con",each=nrow(r.c)), rep("var",each=nrow(r.f)))
+
 
 colnames(r.total)[colnames(r.total)=="LAG"] <- "ZT"
 
@@ -274,20 +295,17 @@ ggplot(r.total,aes(x = expected.ZT,y=ZT)) +
 ```
 
 
-
-
-
-
-
-
+##### Set2:
 ```{r}
 FCFc.gm <- t(CT_group_means[,colnames(CT_group_means) %in% Feb.CF.con[,1]])
 
 FCFv.gm <- t(CT_group_means[,colnames(CT_group_means) %in% Feb.CF.var[,1]])
+```
 
 
 
-
+(1) Run the constant tmp first:
+```{r}
 # Set up the `annot` and `data` which are written in the script we sourced.
 annot <- as.data.frame(rownames(FCFc.gm))  
 colnames(annot) <- "samples"
@@ -315,7 +333,11 @@ st <- system.time({
 })
 print(st)
 
+```
 
+
+(2) Run the fluctuating tmp:
+```{r}
 # Set up the `annot` and `data` which are written in the script we sourced.
 annot <- as.data.frame(rownames(FCFv.gm))  
 colnames(annot) <- "samples"
@@ -342,10 +364,10 @@ st <- system.time({
 })
 print(st)
 
-
 ```
 
 
+(3) Visulaization
 ```{r}
 r.c <- results_c.condition_CT.groups[,c(1,5)]
 r.f <- results_f.condition_CT.groups[,c(1,5)]
@@ -376,15 +398,14 @@ ggplot(r.total,aes(x = expected.ZT,y=ZT)) +
 ```
 
 
-
+##### Set2:
 ```{r}
 MCFc.gm <- t(CT_group_means[,colnames(CT_group_means) %in% Mar.CF.con[,1]])
 
 MCFv.gm <- t(CT_group_means[,colnames(CT_group_means) %in% Mar.CF.var[,1]])
 
 
-
-
+# Constant temp first!
 # Set up the `annot` and `data` which are written in the script we sourced.
 annot <- as.data.frame(rownames(MCFc.gm))  
 colnames(annot) <- "samples"
@@ -413,6 +434,7 @@ st <- system.time({
 print(st)
 
 
+# Now the fluctuating temp:
 # Set up the `annot` and `data` which are written in the script we sourced.
 annot <- as.data.frame(rownames(MCFv.gm))  
 colnames(annot) <- "samples"
@@ -443,6 +465,7 @@ print(st)
 ```
 
 
+Visualization!
 ```{r}
 r.c <- results_c.condition_CT.groups[,c(1,5)]
 r.f <- results_f.condition_CT.groups[,c(1,5)]
